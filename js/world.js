@@ -1,11 +1,32 @@
-/** Chunked voxel world with procedural terrain. */
+/** Multi-dimension chunked voxel world. */
 
 import { Noise } from "./noise.js";
-import { Block, isSolid, isLiquid } from "./blocks.js";
+import {
+  Block,
+  isSolid,
+  isLiquid,
+  BLOCK_DEFS,
+} from "./blocks.js";
+import {
+  classifyBiome,
+  surfaceBlock,
+  underBlock,
+  treeChance,
+  cactusChance,
+  Biome,
+} from "./biomes.js";
+import { rleDecode } from "./save.js";
 
 export const CHUNK_SIZE = 16;
-export const CHUNK_HEIGHT = 64;
-export const SEA_LEVEL = 20;
+export const CHUNK_HEIGHT = 80;
+export const SEA_LEVEL = 28;
+
+export const Dim = { OVERWORLD: 0, NETHER: 1, END: 2 };
+export const DIM_NAMES = {
+  0: { zh: "主世界", en: "Overworld" },
+  1: { zh: "下界", en: "Nether" },
+  2: { zh: "末地", en: "The End" },
+};
 
 export class Chunk {
   constructor(cx, cz) {
@@ -13,6 +34,7 @@ export class Chunk {
     this.cz = cz;
     this.blocks = new Uint8Array(CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE);
     this.dirty = true;
+    this.userModified = false;
     this.mesh = null;
     this.waterMesh = null;
   }
@@ -22,9 +44,7 @@ export class Chunk {
   }
 
   get(x, y, z) {
-    if (x < 0 || x >= CHUNK_SIZE || y < 0 || y >= CHUNK_HEIGHT || z < 0 || z >= CHUNK_SIZE) {
-      return Block.AIR;
-    }
+    if (x < 0 || x >= CHUNK_SIZE || y < 0 || y >= CHUNK_HEIGHT || z < 0 || z >= CHUNK_SIZE) return Block.AIR;
     return this.blocks[Chunk.index(x, y, z)];
   }
 
@@ -35,12 +55,13 @@ export class Chunk {
   }
 }
 
-export class World {
-  constructor(seed = 20260904) {
+export class Dimension {
+  constructor(id, seed) {
+    this.id = id;
     this.seed = seed;
-    this.noise = new Noise(seed);
+    this.noise = new Noise(seed + id * 10007);
     this.chunks = new Map();
-    this.viewDistance = 6;
+    this.viewDistance = id === Dim.OVERWORLD ? 6 : 4;
   }
 
   key(cx, cz) {
@@ -62,31 +83,37 @@ export class World {
     return c;
   }
 
-  worldToChunk(x, y, z) {
+  worldToChunk(x, z) {
     const cx = Math.floor(x / CHUNK_SIZE);
     const cz = Math.floor(z / CHUNK_SIZE);
     const lx = ((x % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
     const lz = ((z % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    return { cx, cz, lx, y, lz };
+    return { cx, cz, lx, lz };
   }
 
   getBlock(x, y, z) {
     if (y < 0 || y >= CHUNK_HEIGHT) return Block.AIR;
-    const { cx, cz, lx, lz } = this.worldToChunk(x, Math.floor(y), z);
+    x = Math.floor(x);
+    y = Math.floor(y);
+    z = Math.floor(z);
+    const { cx, cz, lx, lz } = this.worldToChunk(x, z);
     const c = this.getChunk(cx, cz);
     if (!c) return Block.AIR;
-    return c.get(lx, Math.floor(y), lz);
+    return c.get(lx, y, lz);
   }
 
   setBlock(x, y, z, id) {
     if (y < 0 || y >= CHUNK_HEIGHT) return false;
-    const { cx, cz, lx, y: wy, lz } = this.worldToChunk(x, Math.floor(y), z);
+    x = Math.floor(x);
+    y = Math.floor(y);
+    z = Math.floor(z);
+    const { cx, cz, lx, lz } = this.worldToChunk(x, z);
     const c = this.ensureChunk(cx, cz);
-    const prev = c.get(lx, wy, lz);
+    const prev = c.get(lx, y, lz);
     if (prev === id) return false;
     if (prev === Block.BEDROCK) return false;
-    c.set(lx, wy, lz, id);
-    // dirty neighbors if on edge
+    c.set(lx, y, lz, id);
+    c.userModified = true;
     if (lx === 0) this.markDirty(cx - 1, cz);
     if (lx === CHUNK_SIZE - 1) this.markDirty(cx + 1, cz);
     if (lz === 0) this.markDirty(cx, cz - 1);
@@ -99,22 +126,43 @@ export class World {
     if (c) c.dirty = true;
   }
 
-  heightAt(x, z) {
-    const n = this.noise;
-    const continent = n.fbm2(x * 0.006, z * 0.006, 4) * 0.5 + 0.5;
-    const hills = n.fbm2(x * 0.025 + 100, z * 0.025 + 100, 3) * 0.5 + 0.5;
-    const ridge = Math.abs(n.noise2(x * 0.01 + 40, z * 0.01 + 40));
-    const detail = n.fbm2(x * 0.1, z * 0.1, 2) * 0.5 + 0.5;
-    // bias land upward so continents read as land, oceans as basins
-    let h = 16 + continent * 30 + hills * 14 + ridge * 10 + detail * 3;
-    if (h < SEA_LEVEL + 4 && h > SEA_LEVEL - 3) {
-      h = SEA_LEVEL + (h - SEA_LEVEL) * 0.65;
-    }
-    return Math.max(4, Math.min(CHUNK_HEIGHT - 6, Math.floor(h)));
+  tempAt(x, z) {
+    return this.noise.fbm2(x * 0.004 + 10, z * 0.004 + 10, 2) * 0.5 + 0.5;
   }
 
-  /** Spiral search for a walkable land spawn above sea level. */
+  humAt(x, z) {
+    return this.noise.fbm2(x * 0.005 + 50, z * 0.005 + 50, 2) * 0.5 + 0.5;
+  }
+
+  heightAt(x, z) {
+    const n = this.noise;
+    if (this.id === Dim.NETHER) {
+      const a = n.fbm2(x * 0.04, z * 0.04, 3) * 0.5 + 0.5;
+      const b = n.fbm2(x * 0.01 + 9, z * 0.01 + 9, 2) * 0.5 + 0.5;
+      return Math.floor(20 + a * 28 + b * 10);
+    }
+    if (this.id === Dim.END) {
+      const a = n.fbm2(x * 0.03, z * 0.03, 3) * 0.5 + 0.5;
+      if (a < 0.55) return 0; // void
+      return Math.floor(40 + (a - 0.55) * 40);
+    }
+    const continent = n.fbm2(x * 0.005, z * 0.005, 4) * 0.5 + 0.5;
+    const hills = n.fbm2(x * 0.02 + 100, z * 0.02 + 100, 3) * 0.5 + 0.5;
+    const ridge = Math.abs(n.noise2(x * 0.008 + 40, z * 0.008 + 40));
+    const detail = n.fbm2(x * 0.1, z * 0.1, 2) * 0.5 + 0.5;
+    let h = 22 + continent * 28 + hills * 12 + ridge * 12 + detail * 3;
+    if (h < SEA_LEVEL + 4 && h > SEA_LEVEL - 3) h = SEA_LEVEL + (h - SEA_LEVEL) * 0.65;
+    return Math.max(4, Math.min(CHUNK_HEIGHT - 10, Math.floor(h)));
+  }
+
+  biomeAt(x, z) {
+    const h = this.heightAt(x, z);
+    return classifyBiome(this.tempAt(x, z), this.humAt(x, z), h, SEA_LEVEL);
+  }
+
   findSpawn(originX = 0, originZ = 0) {
+    if (this.id === Dim.END) return { x: 0.5, y: 50, z: 0.5 };
+    if (this.id === Dim.NETHER) return { x: 0.5, y: 40, z: 0.5 };
     for (let r = 0; r < 48; r++) {
       for (let dz = -r; dz <= r; dz++) {
         for (let dx = -r; dx <= r; dx++) {
@@ -122,17 +170,11 @@ export class World {
           const x = originX + dx * 3;
           const z = originZ + dz * 3;
           const h = this.heightAt(x, z);
-          if (h > SEA_LEVEL + 2 && h < 48) {
-            return { x: x + 0.5, y: h + 1.05, z: z + 0.5 };
-          }
+          if (h > SEA_LEVEL + 2 && h < 50) return { x: x + 0.5, y: h + 1.05, z: z + 0.5 };
         }
       }
     }
     return { x: 8.5, y: 40, z: 8.5 };
-  }
-
-  temperatureAt(x, z) {
-    return this.noise.fbm2(x * 0.005 + 40, z * 0.005 + 40, 2) * 0.5 + 0.5;
   }
 
   generate(chunk) {
@@ -144,49 +186,119 @@ export class World {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
         const wx = ox + lx;
         const wz = oz + lz;
-        const h = this.heightAt(wx, wz);
-        const temp = this.temperatureAt(wx, wz);
-        const snowy = temp < 0.28 && h > 30;
-
-        for (let y = 0; y <= h; y++) {
-          let id;
-          if (y === 0) id = Block.BEDROCK;
-          else if (y < h - 4) id = Block.STONE;
-          else if (y < h) id = Block.DIRT;
-          else if (h < SEA_LEVEL - 1) id = Block.SAND;
-          else if (h <= SEA_LEVEL + 1) id = temp < 0.4 ? Block.SAND : Block.GRASS;
-          else id = snowy ? Block.SNOW : Block.GRASS;
-          chunk.set(lx, y, lz, id);
-        }
-
-        // water fill
-        for (let y = h + 1; y <= SEA_LEVEL; y++) {
-          chunk.set(lx, y, lz, Block.WATER);
-        }
+        if (this.id === Dim.NETHER) this.genNetherCol(chunk, lx, lz, wx, wz);
+        else if (this.id === Dim.END) this.genEndCol(chunk, lx, lz, wx, wz);
+        else this.genOverworldCol(chunk, lx, lz, wx, wz);
       }
     }
 
-    // trees
+    this.decorate(chunk);
+    chunk.dirty = true;
+  }
+
+  genOverworldCol(chunk, lx, lz, wx, wz) {
+    const h = this.heightAt(wx, wz);
+    const temp = this.tempAt(wx, wz);
+    const biome = classifyBiome(temp, this.humAt(wx, wz), h, SEA_LEVEL);
+    const snow = biome === Biome.SNOWY || (biome === Biome.MOUNTAINS && h > SEA_LEVEL + 24);
+
+    for (let y = 0; y <= h; y++) {
+      let id;
+      if (y === 0) id = Block.BEDROCK;
+      else if (y < h - 4) {
+        id = Block.STONE;
+        // ores
+        const o = this.noise.noise3(wx * 0.12, y * 0.12, wz * 0.12);
+        if (o > 0.72 && y < 40) id = Block.COAL_ORE;
+        else if (o > 0.78 && y < 28) id = Block.IRON_ORE;
+        else if (o < -0.8 && y > 8) id = Block.GRAVEL;
+      } else if (y < h) id = underBlock(biome);
+      else id = surfaceBlock(biome, snow);
+      chunk.set(lx, y, lz, id);
+    }
+    for (let y = h + 1; y <= SEA_LEVEL; y++) {
+      chunk.set(lx, y, lz, Block.WATER);
+    }
+  }
+
+  genNetherCol(chunk, lx, lz, wx, wz) {
+    const h = this.heightAt(wx, wz);
+    for (let y = 0; y <= Math.max(h, 10); y++) {
+      let id = Block.NETHERRACK;
+      if (y === 0) id = Block.BEDROCK;
+      else if (y === CHUNK_HEIGHT - 1) id = Block.BEDROCK;
+      else if (y > h && y < 12) id = Block.LAVA;
+      else if (y === h) id = this.noise.noise2(wx * 0.2, wz * 0.2) > 0.4 ? Block.SOUL_SAND : Block.NETHERRACK;
+      chunk.set(lx, y, lz, id);
+    }
+    // glow blobs
+    const g = this.noise.noise3(wx * 0.3, 10, wz * 0.3);
+    if (g > 0.75) {
+      const y = 20 + Math.floor((this.noise.noise2(wx, wz) * 0.5 + 0.5) * 20);
+      if (y < CHUNK_HEIGHT - 2) chunk.set(lx, y, lz, Block.GLOWSTONE);
+    }
+  }
+
+  genEndCol(chunk, lx, lz, wx, wz) {
+    const h = this.heightAt(wx, wz);
+    if (h <= 0) return;
+    for (let y = Math.max(1, h - 6); y <= h; y++) {
+      chunk.set(lx, y, lz, y === h ? Block.END_STONE : Block.END_STONE);
+    }
+    // bedrock floor under island
+    chunk.set(lx, 0, lz, Block.BEDROCK);
+  }
+
+  decorate(chunk) {
+    const { cx, cz } = chunk;
+    const ox = cx * CHUNK_SIZE;
+    const oz = cz * CHUNK_SIZE;
+
     for (let lz = 0; lz < CHUNK_SIZE; lz++) {
       for (let lx = 0; lx < CHUNK_SIZE; lx++) {
         const wx = ox + lx;
         const wz = oz + lz;
+
+        if (this.id === Dim.NETHER) {
+          // sparse glow
+          if (this.noise.noise2(wx * 0.5 + 3, wz * 0.5) > 0.92) {
+            const h = this.heightAt(wx, wz);
+            if (h + 2 < CHUNK_HEIGHT) chunk.set(lx, h + 1, lz, Block.GLOWSTONE);
+          }
+          continue;
+        }
+        if (this.id === Dim.END) continue;
+
         const h = this.heightAt(wx, wz);
-        if (h <= SEA_LEVEL + 1 || h > 48) continue;
+        if (h <= SEA_LEVEL + 1 || h > 60) continue;
+        const biome = this.biomeAt(wx, wz);
         const top = chunk.get(lx, h, lz);
-        if (top !== Block.GRASS) continue;
-        // deterministic tree chance
-        const r = this.noise.noise2(wx * 0.71 + 9, wz * 0.73 + 7) * 0.5 + 0.5;
-        if (r < 0.955) continue;
-        // avoid edge placement issues for canopy - allow, neighbors will clip visually fine
-        this.placeTree(chunk, lx, h + 1, lz);
+        if (top !== Block.GRASS && top !== Block.SAND) continue;
+
+        // cactus
+        if (top === Block.SAND) {
+          const cr = this.noise.noise2(wx * 0.7 + 5, wz * 0.7 + 5) * 0.5 + 0.5;
+          if (cr >= cactusChance(biome)) {
+            const ht = 2 + Math.floor(cr * 3);
+            for (let i = 0; i < ht && h + 1 + i < CHUNK_HEIGHT; i++) {
+              chunk.set(lx, h + 1 + i, lz, Block.CACTUS);
+            }
+          }
+        }
+
+        // flowers / tall grass (disabled: plant meshes need polish)
+        // if (top === Block.GRASS) { ... }
+
+        // trees
+        const tr = this.noise.noise2(wx * 0.71 + 9, wz * 0.73 + 7) * 0.5 + 0.5;
+        if (tr >= treeChance(biome) && top === Block.GRASS) {
+          this.placeTree(chunk, lx, h + 1, lz, biome === Biome.SNOWY);
+        }
       }
     }
-
-    chunk.dirty = true;
   }
 
-  placeTree(chunk, x, y, z) {
+  placeTree(chunk, x, y, z, snowy = false) {
     const trunkH = 4 + Math.floor((this.noise.noise2(x, z) * 0.5 + 0.5) * 2);
     for (let i = 0; i < trunkH; i++) {
       if (y + i >= CHUNK_HEIGHT) break;
@@ -203,105 +315,256 @@ export class World {
           const ly = topY + dy;
           const lz = z + dz;
           if (lx < 0 || lx >= CHUNK_SIZE || lz < 0 || lz >= CHUNK_SIZE || ly < 0 || ly >= CHUNK_HEIGHT) continue;
-          if (chunk.get(lx, ly, lz) === Block.AIR) {
-            chunk.set(lx, ly, lz, Block.LEAVES);
-          }
+          if (chunk.get(lx, ly, lz) === Block.AIR) chunk.set(lx, ly, lz, Block.LEAVES);
         }
       }
     }
-    // canopy top
-    if (topY + 2 < CHUNK_HEIGHT && chunk.get(x, topY + 2, z) === Block.AIR) {
-      chunk.set(x, topY + 2, z, Block.LEAVES);
-    }
   }
 
-  /** Load chunks around player, unload far ones. Returns list of chunks that need remesh. */
-  update(playerX, playerZ) {
-    const pcx = Math.floor(playerX / CHUNK_SIZE);
-    const pcz = Math.floor(playerZ / CHUNK_SIZE);
+  update(px, pz) {
+    const pcx = Math.floor(px / CHUNK_SIZE);
+    const pcz = Math.floor(pz / CHUNK_SIZE);
     const vd = this.viewDistance;
     const needed = new Set();
-
-    // generate in spiral-ish order
     for (let dz = -vd; dz <= vd; dz++) {
       for (let dx = -vd; dx <= vd; dx++) {
-        const d2 = dx * dx + dz * dz;
-        if (d2 > (vd + 0.5) * (vd + 0.5)) continue;
+        if (dx * dx + dz * dz > (vd + 0.5) * (vd + 0.5)) continue;
         needed.add(this.key(pcx + dx, pcz + dz));
         this.ensureChunk(pcx + dx, pcz + dz);
       }
     }
-
-    // unload
-    for (const [k, chunk] of this.chunks) {
-      if (!needed.has(k)) {
-        if (chunk.mesh || chunk.waterMesh) {
-          // handled by main via scene; mark for dispose
-          chunk.dirty = false;
-          chunk.unload = true;
-        }
-        this.chunks.delete(k);
-      }
+    for (const k of [...this.chunks.keys()]) {
+      if (!needed.has(k)) this.chunks.delete(k);
     }
-
     return this.chunks;
   }
 
-  /** Voxel DDA raycast. Returns { x,y,z, nx,ny,nz, id } or null. */
   raycast(origin, direction, maxDist = 6) {
     let x = Math.floor(origin.x);
     let y = Math.floor(origin.y);
     let z = Math.floor(origin.z);
-
     const stepX = direction.x > 0 ? 1 : -1;
     const stepY = direction.y > 0 ? 1 : -1;
     const stepZ = direction.z > 0 ? 1 : -1;
-
     const tDeltaX = direction.x === 0 ? Infinity : Math.abs(1 / direction.x);
     const tDeltaY = direction.y === 0 ? Infinity : Math.abs(1 / direction.y);
     const tDeltaZ = direction.z === 0 ? Infinity : Math.abs(1 / direction.z);
-
-    let tMaxX = direction.x === 0 ? Infinity : ((stepX > 0 ? x + 1 - origin.x : origin.x - x) * tDeltaX);
-    let tMaxY = direction.y === 0 ? Infinity : ((stepY > 0 ? y + 1 - origin.y : origin.y - y) * tDeltaY);
-    let tMaxZ = direction.z === 0 ? Infinity : ((stepZ > 0 ? z + 1 - origin.z : origin.z - z) * tDeltaZ);
-
-    let nx = 0;
-    let ny = 0;
-    let nz = 0;
-    let t = 0;
-
+    let tMaxX = direction.x === 0 ? Infinity : (stepX > 0 ? x + 1 - origin.x : origin.x - x) * tDeltaX;
+    let tMaxY = direction.y === 0 ? Infinity : (stepY > 0 ? y + 1 - origin.y : origin.y - y) * tDeltaY;
+    let tMaxZ = direction.z === 0 ? Infinity : (stepZ > 0 ? z + 1 - origin.z : origin.z - z) * tDeltaZ;
+    let nx = 0, ny = 0, nz = 0, t = 0;
     for (let i = 0; i < 256 && t <= maxDist; i++) {
       const id = this.getBlock(x, y, z);
-      if (id !== Block.AIR && !isLiquid(id)) {
+      if (id !== Block.AIR && !isLiquid(id) && id !== Block.TALL_GRASS && id !== Block.FLOWER && id !== Block.PORTAL) {
         return { x, y, z, nx, ny, nz, id };
       }
-
       if (tMaxX < tMaxY && tMaxX < tMaxZ) {
-        t = tMaxX;
-        x += stepX;
-        tMaxX += tDeltaX;
-        nx = -stepX; ny = 0; nz = 0;
+        t = tMaxX; x += stepX; tMaxX += tDeltaX; nx = -stepX; ny = 0; nz = 0;
       } else if (tMaxY < tMaxZ) {
-        t = tMaxY;
-        y += stepY;
-        tMaxY += tDeltaY;
-        nx = 0; ny = -stepY; nz = 0;
+        t = tMaxY; y += stepY; tMaxY += tDeltaY; nx = 0; ny = -stepY; nz = 0;
       } else {
-        t = tMaxZ;
-        z += stepZ;
-        tMaxZ += tDeltaZ;
-        nx = 0; ny = 0; nz = -stepZ;
+        t = tMaxZ; z += stepZ; tMaxZ += tDeltaZ; nx = 0; ny = 0; nz = -stepZ;
       }
     }
     return null;
   }
 
-  /** Solid AABB for physics. */
   isSolidAt(x, y, z) {
-    return isSolid(this.getBlock(Math.floor(x), Math.floor(y), Math.floor(z)));
+    return isSolid(this.getBlock(x, y, z));
   }
 
   isInWater(x, y, z) {
-    return isLiquid(this.getBlock(Math.floor(x), Math.floor(y), Math.floor(z)));
+    return isLiquid(this.getBlock(x, y, z));
+  }
+
+  isInLava(x, y, z) {
+    return this.getBlock(x, y, z) === Block.LAVA;
+  }
+
+  isInPortal(x, y, z) {
+    return this.getBlock(x, y, z) === Block.PORTAL;
   }
 }
+
+/** Manages all dimensions + portal links. */
+export class World {
+  constructor(seed = 20260904) {
+    this.seed = seed;
+    this.dimensions = new Map();
+    for (const id of [Dim.OVERWORLD, Dim.NETHER, Dim.END]) {
+      this.dimensions.set(id, new Dimension(id, seed));
+    }
+    this.activeDim = Dim.OVERWORLD;
+    this.portalTimer = 0;
+  }
+
+  get dim() {
+    return this.dimensions.get(this.activeDim);
+  }
+
+  get viewDistance() {
+    return this.dim.viewDistance;
+  }
+
+  get chunks() {
+    return this.dim.chunks;
+  }
+
+  getChunk(cx, cz) {
+    return this.dim.getChunk(cx, cz);
+  }
+
+  ensureChunk(cx, cz) {
+    return this.dim.ensureChunk(cx, cz);
+  }
+
+  getBlock(x, y, z) {
+    return this.dim.getBlock(x, y, z);
+  }
+
+  setBlock(x, y, z, id) {
+    return this.dim.setBlock(x, y, z, id);
+  }
+
+  heightAt(x, z) {
+    return this.dim.heightAt(x, z);
+  }
+
+  biomeAt(x, z) {
+    return this.dim.biomeAt(x, z);
+  }
+
+  findSpawn(x = 0, z = 0) {
+    return this.dim.findSpawn(x, z);
+  }
+
+  update(px, pz) {
+    return this.dim.update(px, pz);
+  }
+
+  raycast(origin, direction, maxDist = 6) {
+    return this.dim.raycast(origin, direction, maxDist);
+  }
+
+  isSolidAt(x, y, z) {
+    return this.dim.isSolidAt(x, y, z);
+  }
+
+  isInWater(x, y, z) {
+    return this.dim.isInWater(x, y, z);
+  }
+
+  isInLava(x, y, z) {
+    return this.dim.isInLava(x, y, z);
+  }
+
+  isInPortal(x, y, z) {
+    return this.dim.isInPortal(x, y, z);
+  }
+
+  setActiveDim(id) {
+    this.activeDim = id;
+  }
+
+  /**
+   * Build a lit portal frame interior blocks.
+   * Frame is 4x5 obsidian, interior becomes PORTAL.
+   */
+  lightPortal(x, y, z, destDim = Dim.NETHER) {
+    // find a portal-shaped hole near x,y,z or create frame interior
+    // If player used flint on obsidian, try to fill air inside an obsidian frame.
+    const filled = this.fillPortalInterior(x, y, z);
+    return { ok: filled, dest: destDim };
+  }
+
+  fillPortalInterior(x, y, z) {
+    // search nearby for obsidian rectangle 4 wide x 5 tall interior 2x3
+    const dim = this.dim;
+    for (let dx = -3; dx <= 3; dx++) {
+      for (let dy = -3; dy <= 3; dy++) {
+        for (let dz = -1; dz <= 1; dz++) {
+          const ox = x + dx;
+          const oy = y + dy;
+          const oz = z + dz;
+          // check two orientations: frame in X-Y plane or Z-Y plane
+          if (this.tryFrame(ox, oy, oz, 1, 0)) return true;
+          if (this.tryFrame(ox, oy, oz, 0, 1)) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  tryFrame(x, y, z, ax, az) {
+    // ax,az = axis of width (1,0) or (0,1)
+    // assume (x,y,z) is bottom-left interior
+    const dim = this.dim;
+    const isObs = (px, py, pz) => dim.getBlock(px, py, pz) === Block.OBSIDIAN;
+    // interior 2 wide, 3 tall
+    for (let i = 0; i < 2; i++) {
+      for (let j = 0; j < 3; j++) {
+        const px = x + i * ax;
+        const py = y + j;
+        const pz = z + i * az;
+        const id = dim.getBlock(px, py, pz);
+        if (id !== Block.AIR && id !== Block.PORTAL) return false;
+      }
+    }
+    // frame: bottom/top 4 wide, sides
+    for (let i = -1; i <= 2; i++) {
+      if (!isObs(x + i * ax, y - 1, z + i * az)) return false;
+      if (!isObs(x + i * ax, y + 3, z + i * az)) return false;
+    }
+    for (let j = -1; j <= 3; j++) {
+      if (!isObs(x - ax, y + j, z - az)) return false;
+      if (!isObs(x + 2 * ax, y + j, z + 2 * az)) return false;
+    }
+    // light it
+    for (let i = 0; i < 2; i++) {
+      for (let j = 0; j < 3; j++) {
+        dim.setBlock(x + i * ax, y + j, z + i * az, Block.PORTAL);
+      }
+    }
+    return true;
+  }
+
+  /** Coords mapping between dimensions (simplified 1:1). */
+  mapCoords(x, z, from, to) {
+    if (from === Dim.OVERWORLD && to === Dim.NETHER) {
+      return { x: x / 8, z: z / 8 };
+    }
+    if (from === Dim.NETHER && to === Dim.OVERWORLD) {
+      return { x: x * 8, z: z * 8 };
+    }
+    return { x, z };
+  }
+
+  serializePortals() {
+    return {}; // portals are blocks themselves
+  }
+
+  loadFromSave(save) {
+    if (!save.dims) return;
+    for (const id of Object.keys(save.dims)) {
+      const dimId = Number(id);
+      const dim = this.dimensions.get(dimId);
+      if (!dim) continue;
+      // keep generated chunks; overlay user modifications
+      const chunks = save.dims[id];
+      for (const k of Object.keys(chunks)) {
+        const sc = chunks[k];
+        const c = dim.ensureChunk(sc.cx, sc.cz);
+        if (sc.b) {
+          const arr = rleDecode(sc.b, c.blocks.length);
+          c.blocks.set(arr);
+        } else if (sc.blocks) {
+          for (let i = 0; i < c.blocks.length && i < sc.blocks.length; i++) c.blocks[i] = sc.blocks[i];
+        }
+        c.userModified = true;
+        c.dirty = true;
+      }
+    }
+  }
+}
+
+export { BLOCK_DEFS };

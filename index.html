@@ -9,38 +9,15 @@
 </head>
 <body>
   <canvas id="game"></canvas>
-
-  <!-- 启动 / 指针锁定遮罩 -->
-  <div id="overlay" class="overlay">
-    <div class="panel">
-      <div class="logo">VoxelCraft</div>
-      <p class="tagline">浏览器里的 Minecraft 风格体素沙盒</p>
-      <button id="btn-start" type="button">点击开始</button>
-      <div class="controls">
-        <div><kbd>W A S D</kbd> 移动</div>
-        <div><kbd>空格</kbd> 跳跃 / <kbd>F</kbd> 飞行</div>
-        <div><kbd>Shift</kbd> 潜行 / <kbd>Ctrl</kbd> 疾跑</div>
-        <div><kbd>左键</kbd> 破坏 · <kbd>右键</kbd> 放置</div>
-        <div><kbd>1–9</kbd> / <kbd>滚轮</kbd> 选方块</div>
-        <div><kbd>Esc</kbd> 释放鼠标 · <kbd>F3</kbd> 调试</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- HUD -->
+  <div id="overlay" class="overlay"></div>
   <div id="hud" class="hud hidden">
     <div id="crosshair" class="crosshair" aria-hidden="true"></div>
     <div id="debug" class="debug hidden"></div>
     <div id="toast" class="toast"></div>
-    <div id="hotbar" class="hotbar" role="toolbar" aria-label="快捷栏"></div>
+    <div id="hotbar" class="hotbar" role="toolbar" aria-label="hotbar"></div>
   </div>
-
   <script type="importmap">
-  {
-    "imports": {
-      "three": "./js/vendor/three.module.js"
-    }
-  }
+  { "imports": { "three": "./js/vendor/three.module.js" } }
   </script>
   <script type="module" src="js/main.js"></script>
 </body>

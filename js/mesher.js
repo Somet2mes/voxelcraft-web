@@ -117,23 +117,23 @@ function vertexAO(side1, side2, corner) {
 }
 
 function aoValue(ao) {
-  return 0.45 + (ao / 3) * 0.55;
+  return 0.7 + (ao / 3) * 0.3;
 }
 
 export function createMaterials(texture) {
   const opaque = new THREE.MeshLambertMaterial({
     map: texture,
     vertexColors: true,
-    alphaTest: 0.1,
+    side: THREE.DoubleSide,
   });
 
   const transparent = new THREE.MeshLambertMaterial({
     map: texture,
     vertexColors: true,
     transparent: true,
-    opacity: 0.62,
+    opacity: 0.65,
     depthWrite: false,
-    side: THREE.FrontSide,
+    side: THREE.DoubleSide,
   });
 
   return { opaque, transparent };
@@ -171,6 +171,40 @@ export function buildChunkGeometry(world, chunk, tileUV) {
         const liquid = isLiquid(id);
         const wx = ox + x;
         const wz = oz + z;
+
+        // X-shaped plants
+        if (def.cross) {
+          const faceName = def.faces.side;
+          const { u0, v0, u1, v1 } = tileUV(faceName);
+          const quads = [
+            [
+              [0.2, 0, 0.2],
+              [0.8, 0, 0.8],
+              [0.8, 0.95, 0.8],
+              [0.2, 0.95, 0.2],
+            ],
+            [
+              [0.8, 0, 0.2],
+              [0.2, 0, 0.8],
+              [0.2, 0.95, 0.8],
+              [0.8, 0.95, 0.2],
+            ],
+          ];
+          for (const corners of quads) {
+            const base = solidPos.length / 3;
+            for (let ci = 0; ci < 4; ci++) {
+              const c = corners[ci];
+              solidPos.push(x + c[0], y + c[1], z + c[2]);
+              solidNorm.push(0, 1, 0);
+              const u = u0 + (u1 - u0) * (ci % 2);
+              const v = v0 + (v1 - v0) * (ci < 2 ? 0 : 1);
+              solidUv.push(u, v);
+              solidCol.push(1, 1, 1);
+            }
+            solidIdx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+          }
+          continue;
+        }
 
         for (const face of FACES) {
           const nx = x + face.dir[0];
@@ -233,7 +267,7 @@ export function buildChunkGeometry(world, chunk, tileUV) {
               const side1 = isSolidOpaque(getWorld(wx + dx + s1x, y + dy + s1y, wz + dz + s1z)) ? 1 : 0;
               const side2 = isSolidOpaque(getWorld(wx + dx + s2x, y + dy + s2y, wz + dz + s2z)) ? 1 : 0;
               const corner = isSolidOpaque(getWorld(wx + dx + s1x + s2x, y + dy + s1y + s2y, wz + dz + s1z + s2z)) ? 1 : 0;
-              aoLevels[ci] = vertexAO(side1, side2, corner);
+              aoLevels[ci] = aoValue(vertexAO(side1, side2, corner));
             }
           }
 
@@ -257,19 +291,15 @@ export function buildChunkGeometry(world, chunk, tileUV) {
             // slight face tint
             let tint = 1;
             if (face.dir[1] === 1) tint = 1;
-            else if (face.dir[1] === -1) tint = 0.55;
-            else if (face.dir[0] !== 0) tint = 0.8;
-            else tint = 0.7;
-            const a = shade * tint;
+            else if (face.dir[1] === -1) tint = 0.72;
+            else if (face.dir[0] !== 0) tint = 0.88;
+            else tint = 0.82;
+            const a = Math.min(1, Math.max(0.25, shade * tint));
             C.push(a, a, a);
           }
 
-          // flip quad diagonal for better AO interpolation
-          if (aoLevels[0] + aoLevels[2] > aoLevels[1] + aoLevels[3]) {
-            I.push(base, base + 1, base + 2, base, base + 2, base + 3);
-          } else {
-            I.push(base + 1, base + 2, base + 3, base + 1, base + 3, base);
-          }
+          // consistent winding (no diagonal flip — avoids checker artifacts)
+          I.push(base, base + 1, base + 2, base, base + 2, base + 3);
         }
       }
     }
