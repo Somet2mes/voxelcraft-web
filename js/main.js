@@ -2,7 +2,7 @@
 
 import * as THREE from "three";
 import { World, Dim, DIM_NAMES, CHUNK_SIZE, SEA_LEVEL } from "./world.js";
-import { buildTextureAtlas, Block, blockName, DEFAULT_HOTBAR } from "./blocks.js";
+import { buildTextureAtlas, animateAtlas, Block, blockName, DEFAULT_HOTBAR } from "./blocks.js";
 import { createMaterials, buildChunkGeometry } from "./mesher.js";
 import { Player } from "./player.js";
 import { UI } from "./ui.js";
@@ -202,6 +202,8 @@ let portalToastCd = 0;
 let autoSaveTimer = 20;
 let uiOpen = false;
 let paused = false;
+let animTimer = 0;
+let lightRefresh = 2;
 
 function chunkKey(cx, cz) {
   return `${world.activeDim}:${cx},${cz}`;
@@ -228,7 +230,8 @@ function rebuildChunk(chunk) {
     disposeMesh(prev.solid);
     disposeMesh(prev.liquid);
   }
-  const { solid, liquid } = buildChunkGeometry(world, chunk, atlas.tileUV);
+  const dayFactor = world.getDayLight(timeOfDay);
+  const { solid, liquid } = buildChunkGeometry(world, chunk, atlas.tileUV, dayFactor);
   const entry = {
     solid: null,
     liquid: null,
@@ -531,6 +534,13 @@ function cap(s) {
 function actPlace() {
   if (uiOpen || player.dead) return;
   const hit = world.raycast(camera.position, player.getLookDir(), 6.5);
+  // lever toggle
+  if (hit && hit.id === Block.LEVER) {
+    const on = world.toggleLever(hit.x, hit.y, hit.z);
+    sfx.craft();
+    ui.toast(on ? "红石灯：开" : "红石灯：关");
+    return;
+  }
   const inter = player.interact(hit);
   if (inter) {
     openUI(inter.kind === "craft" ? "table" : inter.kind);
@@ -885,6 +895,22 @@ function loop(now) {
   updateParticles(dt);
   updateSky(dt);
   weather.update(dt, player, world, timeOfDay);
+  // animated atlas (water/lava/portal)
+  if (!animTimer || (animTimer -= dt) <= 0) {
+    animTimer = 0.12;
+    animateAtlas(atlas, performance.now() * 0.001);
+  }
+  // refresh nearby chunk lighting periodically when day changes a lot
+  lightRefresh -= dt;
+  if (lightRefresh <= 0) {
+    lightRefresh = 2.5;
+    // mark a few chunks dirty so mesh uses new dayFactor
+    let n = 0;
+    for (const c of world.chunks.values()) {
+      if (n++ > 8) break;
+      c.dirty = true;
+    }
+  }
 
   ui.updateVitals(player.health, player.hunger, player.oxygen, player.xpLevel, player.xp);
   ui.updateDebug(

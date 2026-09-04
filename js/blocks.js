@@ -31,6 +31,12 @@ export const Block = {
   FLOWER: 27,
   GRAVEL: 28,
   CLAY: 29,
+  TORCH: 30,
+  LEVER: 31,
+  REDSTONE_WIRE: 32,
+  REDSTONE_LAMP: 33,
+  BRICK: 34,
+  HAY: 35,
 };
 
 const B = Block;
@@ -207,6 +213,7 @@ export const BLOCK_DEFS = {
     liquid: true,
     damage: 4,
     emissive: true,
+    light: 15,
     faces: { top: "lava", bottom: "lava", side: "lava" },
     colors: { top: "#e25822", side: "#e25822", bottom: "#e25822" },
   },
@@ -215,6 +222,7 @@ export const BLOCK_DEFS = {
     nameEn: "Glowstone",
     solid: true,
     emissive: true,
+    light: 15,
     faces: { top: "glowstone", bottom: "glowstone", side: "glowstone" },
     colors: { top: "#e8c86a", side: "#e8c86a", bottom: "#e8c86a" },
   },
@@ -288,6 +296,61 @@ export const BLOCK_DEFS = {
     solid: true,
     faces: { top: "clay", bottom: "clay", side: "clay" },
     colors: { top: "#9aa8b0", side: "#9aa8b0", bottom: "#9aa8b0" },
+  },
+  [B.TORCH]: {
+    name: "火把",
+    nameEn: "Torch",
+    solid: false,
+    transparent: true,
+    cross: true,
+    light: 14,
+    emissive: true,
+    faces: { top: "torch", bottom: "torch", side: "torch" },
+    colors: { top: "#e8c86a", side: "#e8c86a", bottom: "#6b4423" },
+  },
+  [B.LEVER]: {
+    name: "拉杆",
+    nameEn: "Lever",
+    solid: false,
+    transparent: true,
+    cross: true,
+    interact: "lever",
+    faces: { top: "lever", bottom: "lever", side: "lever" },
+    colors: { top: "#8a7a60", side: "#8a7a60", bottom: "#6a5a40" },
+  },
+  [B.REDSTONE_WIRE]: {
+    name: "红石线",
+    nameEn: "Redstone",
+    solid: false,
+    transparent: true,
+    cross: true,
+    faces: { top: "wire", bottom: "wire", side: "wire" },
+    colors: { top: "#a01818", side: "#a01818", bottom: "#a01818" },
+  },
+  [B.REDSTONE_LAMP]: {
+    name: "红石灯",
+    nameEn: "Redstone Lamp",
+    solid: true,
+    faces: { top: "lamp_off", bottom: "lamp_off", side: "lamp_off" },
+    colors: { top: "#8a6a30", side: "#8a6a30", bottom: "#8a6a30" },
+    poweredFaces: { top: "lamp_on", bottom: "lamp_on", side: "lamp_on" },
+    poweredColors: { top: "#f0d070", side: "#f0d070", bottom: "#f0d070" },
+  },
+  [B.BRICK]: {
+    name: "砖块",
+    nameEn: "Bricks",
+    solid: true,
+    pickLevel: 1,
+    faces: { top: "brick", bottom: "brick", side: "brick" },
+    colors: { top: "#a05040", side: "#a05040", bottom: "#a05040" },
+  },
+  [B.HAY]: {
+    name: "干草块",
+    nameEn: "Hay Bale",
+    solid: true,
+    axePreferred: true,
+    faces: { top: "hay_top", bottom: "hay_top", side: "hay_side" },
+    colors: { top: "#c8b040", side: "#b89830", bottom: "#c8b040" },
   },
 };
 
@@ -468,6 +531,53 @@ function drawTile(ctx, ox, oy, kind, base) {
       }
   } else if (kind === "bedrock") {
     for (let i = 0; i < 30; i++) px(ctx, ox + ((i * 4 + 1) % TILE), oy + ((i * 9 + 3) % TILE), shade(base, i % 3 === 0 ? 0.35 : -0.4));
+  } else if (kind === "torch") {
+    ctx.clearRect(ox, oy, TILE, TILE);
+    for (let y = 6; y < 16; y++) px(ctx, ox + 7, oy + y, "#6b4423");
+    for (let y = 4; y < 7; y++) {
+      px(ctx, ox + 7, oy + y, "#e8c86a");
+      px(ctx, ox + 8, oy + y, "#f0e0a0");
+    }
+    px(ctx, ox + 7, oy + 3, "#fff0b0");
+  } else if (kind === "lever") {
+    ctx.clearRect(ox, oy, TILE, TILE);
+    for (let y = 8; y < 14; y++) px(ctx, ox + 7, oy + y, "#6a5a40");
+    for (let y = 4; y < 9; y++) px(ctx, ox + 7, oy + y, "#a09070");
+    px(ctx, ox + 7, oy + 3, "#c0b090");
+  } else if (kind === "wire") {
+    ctx.clearRect(ox, oy, TILE, TILE);
+    for (let i = 0; i < 16; i++) {
+      px(ctx, ox + i, oy + 8, "#a01818");
+      px(ctx, ox + 8, oy + i, "#a01818");
+      px(ctx, ox + i, oy + 7, "#601010");
+    }
+  } else if (kind === "lamp_off" || kind === "lamp_on") {
+    const on = kind === "lamp_on";
+    for (let y = 0; y < TILE; y++)
+      for (let x = 0; x < TILE; x++) {
+        const border = x < 2 || y < 2 || x > 13 || y > 13;
+        px(ctx, ox + x, oy + y, border ? shade(base, -0.25) : on ? shade(base, 0.25) : base);
+      }
+    if (on) {
+      for (let i = 0; i < 20; i++) px(ctx, ox + ((i * 7) % 12) + 2, oy + ((i * 5) % 12) + 2, "#fff6c0");
+    }
+  } else if (kind === "brick") {
+    for (let y = 0; y < TILE; y++) {
+      for (let x = 0; x < TILE; x++) {
+        const row = Math.floor(y / 4);
+        const off = (row % 2) * 4;
+        const joint = y % 4 === 0 || (x + off) % 8 === 0;
+        px(ctx, ox + x, oy + y, joint ? shade(base, -0.35) : shade(base, ((x + y) % 5) * 0.04));
+      }
+    }
+  } else if (kind === "hay_top" || kind === "hay_side") {
+    for (let y = 0; y < TILE; y++)
+      for (let x = 0; x < TILE; x++) {
+        if (kind === "hay_side") {
+          const band = y % 5 === 0;
+          px(ctx, ox + x, oy + y, shade(base, band ? -0.25 : ((x + y) % 4) * 0.05));
+        } else px(ctx, ox + x, oy + y, shade(base, ((x * y) % 7) * 0.04));
+      }
   } else if (kind === "coal_ore" || kind === "iron_ore") {
     const blob = kind === "coal_ore" ? "#1a1a1a" : "#d0a070";
     const spots = [
@@ -557,7 +667,9 @@ export function buildTextureAtlas(THREE) {
   for (const def of Object.values(BLOCK_DEFS)) {
     for (const face of FACE_ORDER) {
       const n = def.faces[face];
-      if (!names.has(n)) names.set(n, idx++);
+      if (n && !names.has(n)) names.set(n, idx++);
+      const p = def.poweredFaces?.[face];
+      if (p && !names.has(p)) names.set(p, idx++);
     }
   }
 
@@ -603,6 +715,52 @@ export function buildTextureAtlas(THREE) {
   };
 
   return { canvas, texture, tileUV, names };
+}
+
+/** Animate water / lava / portal tiles in-place on the atlas canvas. */
+export function animateAtlas(atlas, t) {
+  const { canvas, names } = atlas;
+  const ctx = canvas.getContext("2d");
+  const drawAnim = (name, base, kind) => {
+    const i = names.get(name);
+    if (i === undefined) return;
+    const ox = (i % ATLAS_COLS) * TILE;
+    const oy = Math.floor(i / ATLAS_COLS) * TILE;
+    for (let y = 0; y < TILE; y++) {
+      for (let x = 0; x < TILE; x++) {
+        let v;
+        if (kind === "water") {
+          v = Math.sin(x * 0.55 + t * 2.1) * 0.5 + Math.sin(y * 0.7 - t * 1.4) * 0.5;
+          const c = shade(base, v * 0.12 - 0.02);
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = c;
+          ctx.fillRect(ox + x, oy + y, 1, 1);
+        } else if (kind === "lava") {
+          v = Math.sin(x * 0.4 + t * 3) * Math.cos(y * 0.5 - t * 2.2);
+          const c = shade(base, v * 0.25);
+          ctx.fillStyle = c;
+          ctx.fillRect(ox + x, oy + y, 1, 1);
+          if (v > 0.75) {
+            ctx.fillStyle = "#ffd080";
+            ctx.fillRect(ox + x, oy + y, 1, 1);
+          }
+        } else if (kind === "portal") {
+          v = Math.sin(x * 0.6 + y * 0.3 + t * 4);
+          ctx.fillStyle = shade(base, v * 0.3);
+          ctx.fillRect(ox + x, oy + y, 1, 1);
+        } else if (kind === "lamp_on") {
+          const pulse = 0.85 + Math.sin(t * 6) * 0.15;
+          ctx.fillStyle = shade(base, pulse * 0.2);
+          ctx.fillRect(ox + x, oy + y, 1, 1);
+        }
+      }
+    }
+  };
+  drawAnim("water", "#3a7ecf", "water");
+  drawAnim("lava", "#e25822", "lava");
+  drawAnim("portal", "#8b3dff", "portal");
+  drawAnim("lamp_on", "#f0d070", "lamp_on");
+  atlas.texture.needsUpdate = true;
 }
 
 function shadeRef(c, t) {

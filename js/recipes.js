@@ -134,6 +134,47 @@ export const CRAFT_RECIPES = [
     shapeless: [Block.SAND, Block.SAND],
     out: { id: Block.GLASS, count: 1 },
   },
+  // torch: coal + stick
+  {
+    pattern: [
+      [Item.COAL, 0, 0],
+      [Item.STICK, 0, 0],
+      [0, 0, 0],
+    ],
+    out: { id: Block.TORCH, count: 4 },
+  },
+  // lever
+  {
+    pattern: [
+      [Item.STICK, 0, 0],
+      [Block.COBBLE, 0, 0],
+      [0, 0, 0],
+    ],
+    out: { id: Block.LEVER, count: 1 },
+  },
+  // redstone lamp
+  {
+    pattern: [
+      [Block.PLANKS, Block.PLANKS, Block.PLANKS],
+      [Block.PLANKS, Block.GLOWSTONE, Block.PLANKS],
+      [Block.PLANKS, Block.PLANKS, Block.PLANKS],
+    ],
+    out: { id: Block.REDSTONE_LAMP, count: 1 },
+  },
+  // redstone wire
+  {
+    pattern: [
+      [Item.COAL, Item.COAL, 0],
+      [0, Item.STICK, 0],
+      [0, 0, 0],
+    ],
+    out: { id: Block.REDSTONE_WIRE, count: 6 },
+  },
+  // brick
+  {
+    shapeless: [Block.CLAY, Block.CLAY],
+    out: { id: Block.BRICK, count: 2 },
+  },
 ];
 
 export const SMELT_RECIPES = {

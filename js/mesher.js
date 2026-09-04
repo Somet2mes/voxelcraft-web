@@ -143,7 +143,7 @@ export function createMaterials(texture) {
  * Build solid + liquid meshes for a chunk.
  * @returns {{ solid: THREE.BufferGeometry|null, liquid: THREE.BufferGeometry|null }}
  */
-export function buildChunkGeometry(world, chunk, tileUV) {
+export function buildChunkGeometry(world, chunk, tileUV, dayFactor = 1) {
   const solidPos = [];
   const solidNorm = [];
   const solidUv = [];
@@ -294,7 +294,15 @@ export function buildChunkGeometry(world, chunk, tileUV) {
             else if (face.dir[1] === -1) tint = 0.72;
             else if (face.dir[0] !== 0) tint = 0.88;
             else tint = 0.82;
-            const a = Math.min(1, Math.max(0.25, shade * tint));
+            // sky/block light at the adjacent air cell
+            const lx = wx + face.dir[0];
+            const ly = y + face.dir[1];
+            const lz = wz + face.dir[2];
+            let light = 0.75;
+            if (world.sampleLightAt) {
+              light = world.sampleLightAt(lx, ly, lz, dayFactor);
+            }
+            const a = Math.min(1, Math.max(0.18, shade * tint * (0.35 + light * 0.75)));
             C.push(a, a, a);
           }
 

@@ -16,6 +16,7 @@ import {
   Biome,
 } from "./biomes.js";
 import { rleDecode } from "./save.js";
+import { computeChunkLight, sampleLight } from "./light.js";
 
 export const CHUNK_SIZE = 16;
 export const CHUNK_HEIGHT = 80;
@@ -193,7 +194,69 @@ export class Dimension {
     }
 
     this.decorate(chunk);
+    this.placeVillage(chunk);
+    computeChunkLight(chunk, (x, y, z) => this.getBlock(x, y, z));
     chunk.dirty = true;
+    chunk.lightDirty = false;
+  }
+
+  placeVillage(chunk) {
+    if (this.id !== Dim.OVERWORLD) return;
+    const { cx, cz } = chunk;
+    // grid placement every 6 chunks + noise jitter skip
+    if (((cx % 6) + 6) % 6 !== 2 || ((cz % 6) + 6) % 6 !== 2) return;
+    const skip = this.noise.noise2(cx * 0.2, cz * 0.2);
+    if (skip < -0.35) return;
+    const ox = 3;
+    const oz = 3;
+    const wx = cx * CHUNK_SIZE + ox;
+    const wz = cz * CHUNK_SIZE + oz;
+    const h = this.heightAt(wx, wz);
+    if (h <= SEA_LEVEL + 1 || h > 52) return;
+    const W = 7;
+    const D = 7;
+    const H = 4;
+    for (let z = 0; z < D; z++) {
+      for (let x = 0; x < W; x++) {
+        if (ox + x >= CHUNK_SIZE || oz + z >= CHUNK_SIZE) continue;
+        chunk.set(ox + x, h, oz + z, Block.COBBLE);
+        chunk.set(ox + x, h + 1, oz + z, Block.COBBLE);
+      }
+    }
+    for (let y = h + 2; y < h + 2 + H; y++) {
+      for (let z = 0; z < D; z++) {
+        for (let x = 0; x < W; x++) {
+          if (ox + x >= CHUNK_SIZE || oz + z >= CHUNK_SIZE) continue;
+          const edge = x === 0 || z === 0 || x === W - 1 || z === D - 1;
+          if (!edge) {
+            chunk.set(ox + x, y, oz + z, Block.AIR);
+            continue;
+          }
+          if (z === 0 && (x === 3 || x === 4) && y < h + 5) {
+            chunk.set(ox + x, y, oz + z, Block.AIR);
+            continue;
+          }
+          if (y === h + 4 && ((x === 0 || x === W - 1) && (z === 2 || z === 4))) {
+            chunk.set(ox + x, y, oz + z, Block.GLASS);
+            continue;
+          }
+          chunk.set(ox + x, y, oz + z, Block.PLANKS);
+        }
+      }
+    }
+    const roofY = h + 2 + H;
+    for (let z = 0; z < D; z++) {
+      for (let x = 0; x < W; x++) {
+        if (ox + x >= CHUNK_SIZE || oz + z >= CHUNK_SIZE) continue;
+        chunk.set(ox + x, roofY, oz + z, x === 0 || z === 0 || x === W - 1 || z === D - 1 ? Block.PLANKS : Block.BRICK);
+      }
+    }
+    chunk.set(ox + 3, h + 3, oz + 3, Block.REDSTONE_LAMP);
+    chunk.set(ox + 5, h + 2, oz + 2, Block.LEVER);
+    chunk.set(ox + 5, h + 2, oz + 5, Block.HAY);
+    chunk.set(ox + 4, h + 2, oz + 3, Block.TORCH);
+    chunk.set(ox + 2, h + 2, oz + 3, Block.CHEST);
+    chunk.userModified = true;
   }
 
   genOverworldCol(chunk, lx, lz, wx, wz) {
@@ -390,6 +453,73 @@ export class Dimension {
   isInPortal(x, y, z) {
     return this.getBlock(x, y, z) === Block.PORTAL;
   }
+
+  /** Toggle levers near a point; update lamp light. */
+  toggleLever(x, y, z) {
+    // flip a virtual power set
+    if (!this.powered) this.powered = new Set();
+    const k = `${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}`;
+    const on = !this.powered.has(k);
+    if (on) this.powered.add(k);
+    else this.powered.delete(k);
+    // relight nearby lamps
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -6; dx <= 6; dx++) {
+        for (let dz = -6; dz <= 6; dz++) {
+          const id = this.getBlock(x + dx, y + dy, z + dz);
+          if (id === Block.REDSTONE_LAMP) {
+            // keep same id; light recompute via emissive override
+          }
+        }
+      }
+    }
+    // recompute light for affected chunks
+    this.relightAround(x, z);
+    return on;
+  }
+
+  relightAround(x, z) {
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cz = Math.floor(z / CHUNK_SIZE);
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const c = this.getChunk(cx + dx, cz + dz);
+        if (!c) continue;
+        computeChunkLight(c, (px, py, pz) => this.getBlock(px, py, pz));
+        // boost lamps near powered levers
+        if (this.powered?.size) {
+          for (let y = 0; y < CHUNK_HEIGHT; y++) {
+            for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+              for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+                if (c.get(lx, y, lz) !== Block.REDSTONE_LAMP) continue;
+                const wx = c.cx * CHUNK_SIZE + lx;
+                const wz = c.cz * CHUNK_SIZE + lz;
+                for (const pk of this.powered) {
+                  const [px, py, pz] = pk.split(",").map(Number);
+                  if (Math.hypot(px - wx, pz - wz) <= 8 && Math.abs(py - y) <= 4) {
+                    const i = (y * CHUNK_SIZE + lz) * CHUNK_SIZE + lx;
+                    if (c.blockLight) c.blockLight[i] = 15;
+                  }
+                }
+              }
+            }
+          }
+        }
+        c.dirty = true;
+      }
+    }
+  }
+
+  getDayLight(timeOfDay) {
+    const sunH = Math.sin(timeOfDay * Math.PI * 2);
+    return Math.max(0.12, Math.min(1, sunH * 0.85 + 0.35));
+  }
+
+  sampleLightAt(x, y, z, dayFactor) {
+    const { cx, cz, lx, lz } = this.worldToChunk(Math.floor(x), Math.floor(z));
+    const c = this.getChunk(cx, cz);
+    return sampleLight(c, lx, Math.floor(y), lz, dayFactor);
+  }
 }
 
 /** Manages all dimensions + portal links. */
@@ -466,6 +596,22 @@ export class World {
 
   isInPortal(x, y, z) {
     return this.dim.isInPortal(x, y, z);
+  }
+
+  toggleLever(x, y, z) {
+    return this.dim.toggleLever(x, y, z);
+  }
+
+  relightAround(x, z) {
+    return this.dim.relightAround(x, z);
+  }
+
+  getDayLight(timeOfDay) {
+    return this.dim.getDayLight(timeOfDay);
+  }
+
+  sampleLightAt(x, y, z, dayFactor) {
+    return this.dim.sampleLightAt(x, y, z, dayFactor);
   }
 
   setActiveDim(id) {
