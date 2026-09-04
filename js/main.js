@@ -71,6 +71,125 @@ const chunkGroup = new THREE.Group();
 scene.add(chunkGroup);
 const meshMap = new Map();
 
+// procedural clouds (flat voxel-ish boxes)
+const cloudGroup = new THREE.Group();
+scene.add(cloudGroup);
+function buildClouds() {
+  cloudGroup.clear();
+  const mat = new THREE.MeshLambertMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.55,
+    depthWrite: false,
+  });
+  const rng = (s) => {
+    let x = s;
+    return () => {
+      x = (x * 16807) % 2147483647;
+      return (x & 0xffff) / 0xffff;
+    };
+  };
+  const rand = rng(99);
+  for (let i = 0; i < 28; i++) {
+    const w = 6 + rand() * 14;
+    const d = 4 + rand() * 10;
+    const g = new THREE.BoxGeometry(w, 1.2, d);
+    const m = new THREE.Mesh(g, mat);
+    m.position.set((rand() - 0.5) * 220, 72 + rand() * 8, (rand() - 0.5) * 220);
+    m.userData.vx = 0.4 + rand() * 0.6;
+    cloudGroup.add(m);
+  }
+}
+buildClouds();
+
+// third-person body
+const bodyGroup = new THREE.Group();
+function buildPlayerBody() {
+  bodyGroup.clear();
+  const skin = new THREE.MeshLambertMaterial({ color: 0xd2a679 });
+  const shirt = new THREE.MeshLambertMaterial({ color: 0x3a8fd6 });
+  const pants = new THREE.MeshLambertMaterial({ color: 0x3a4a8a });
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), skin);
+  head.position.y = 1.55;
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.7, 0.3), shirt);
+  torso.position.y = 0.95;
+  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.7, 0.22), pants);
+  legL.position.set(-0.14, 0.35, 0);
+  const legR = legL.clone();
+  legR.position.x = 0.14;
+  const armL = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.65, 0.18), skin);
+  armL.position.set(-0.38, 0.95, 0);
+  const armR = armL.clone();
+  armR.position.x = 0.38;
+  bodyGroup.add(head, torso, legL, legR, armL, armR);
+  scene.add(bodyGroup);
+}
+buildPlayerBody();
+
+// world item drops
+const dropItems = [];
+
+function spawnDrop(id, count, x, y, z) {
+  const def = BLOCK_DEFS_DROP_COLOR(id);
+  const mesh = new THREE.Mesh(
+    new THREE.BoxGeometry(0.25, 0.25, 0.25),
+    new THREE.MeshLambertMaterial({ color: def })
+  );
+  mesh.position.set(x, y + 0.3, z);
+  scene.add(mesh);
+  dropItems.push({ mesh, id, count, vy: 3, life: 60, age: 0 });
+}
+
+function BLOCK_DEFS_DROP_COLOR(id) {
+  const map = {
+    1: 0x4f8f35,
+    2: 0x8b6914,
+    3: 0x7a7a7a,
+    4: 0xe0c97a,
+    6: 0x6b4423,
+    7: 0x3f8f2f,
+    8: 0xb8945f,
+    9: 0x6e6e6e,
+    12: 0x333333,
+    13: 0x222222,
+    14: 0xc4a484,
+    1002: 0x222222,
+    1003: 0xc4a484,
+    1004: 0xd8d8d8,
+    1005: 0x333333,
+    1006: 0xd33333,
+    1007: 0xc4892e,
+  };
+  return map[id] ?? 0xaaaaaa;
+}
+
+function updateDrops(dt, player) {
+  for (const d of dropItems) {
+    d.age += dt;
+    d.vy -= 16 * dt;
+    d.mesh.position.y += d.vy * dt;
+    if (world.isSolidAt(d.mesh.position.x, d.mesh.position.y - 0.1, d.mesh.position.z)) {
+      d.mesh.position.y = Math.floor(d.mesh.position.y) + 0.2;
+      d.vy = 0;
+    }
+    d.mesh.rotation.y += dt * 2;
+    const dist = d.mesh.position.distanceTo(player.position);
+    if (dist < 2.2) {
+      player.inventory.add(d.id, d.count);
+      player.addXP(1);
+      scene.remove(d.mesh);
+      d.age = 999;
+      sfx.pick();
+    }
+  }
+  for (let i = dropItems.length - 1; i >= 0; i--) {
+    if (dropItems[i].age > dropItems[i].life) {
+      scene.remove(dropItems[i].mesh);
+      dropItems.splice(i, 1);
+    }
+  }
+}
+
 let pointerLocked = false;
 let gameStarted = false;
 let gamemode = "survival";
@@ -82,6 +201,7 @@ let placeCooldown = 0;
 let portalToastCd = 0;
 let autoSaveTimer = 20;
 let uiOpen = false;
+let paused = false;
 
 function chunkKey(cx, cz) {
   return `${world.activeDim}:${cx},${cz}`;
@@ -241,6 +361,29 @@ function updateSky(dt) {
   scene.fog.color.copy(colored);
 }
 
+function maybeFluidReact(dt) {
+  if (Math.random() > 0.08) return;
+  const p = player.position;
+  const x = Math.floor(p.x) + (Math.random() * 8 - 4);
+  const y = Math.floor(p.y) + (Math.random() * 4 - 2);
+  const z = Math.floor(p.z) + (Math.random() * 8 - 4);
+  if (world.getBlock(x, y, z) !== Block.LAVA) return;
+  for (const [dx, dy, dz] of [
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 1, 0],
+    [0, -1, 0],
+    [0, 0, 1],
+    [0, 0, -1],
+  ]) {
+    if (world.getBlock(x + dx, y + dy, z + dz) === Block.WATER) {
+      world.setBlock(x, y, z, Math.random() < 0.5 ? Block.OBSIDIAN : Block.COBBLE);
+      sfx.splash();
+      return;
+    }
+  }
+}
+
 function requestLock() {
   canvas.requestPointerLock?.();
 }
@@ -375,6 +518,8 @@ function actBreak() {
     return;
   }
   spawnParticles(r.x, r.y, r.z, 0x8b6914);
+  if (r.drop) spawnDrop(r.drop, r.count || 1, r.x + 0.5, r.y + 0.5, r.z + 0.5);
+  if (r.bonus) spawnDrop(r.bonus, 1, r.x + 0.5, r.y + 0.7, r.z + 0.5);
   ui.toast(`${t("broke")} ${blockName(r.id, getLang())}`);
   ui.refreshHotbar(player.inventory, player.hotbarIndex);
 }
@@ -468,9 +613,35 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   if (!pointerLocked && !player.dead) return;
+  if (e.code === "Escape") {
+    e.preventDefault();
+    document.exitPointerLock?.();
+    ui.showPause(
+      () => requestLock(),
+      () => {
+        doSave();
+        location.reload();
+      }
+    );
+    return;
+  }
   if (e.code === "F3") {
     e.preventDefault();
     ui.toggleDebug();
+    return;
+  }
+  if (e.code === "F5") {
+    e.preventDefault();
+    const v = player.cycleView();
+    ui.toast(["第一人称", "第三人称", "正面视角"][v] || "View");
+    return;
+  }
+  if (e.code === "KeyQ") {
+    const d = player.dropHeld();
+    if (d) {
+      spawnDrop(d.id, d.count, player.position.x, player.position.y, player.position.z);
+      ui.refreshHotbar(player.inventory, player.hotbarIndex);
+    }
     return;
   }
   if (e.code === "KeyE") {
@@ -484,11 +655,7 @@ window.addEventListener("keydown", (e) => {
     doSave();
     return;
   }
-  if (e.code === "F5" && gamemode === "creative") {
-    gamemode = "survival";
-    player.gamemode = "survival";
-    player.flying = false;
-    ui.toast(t("survival"));
+  if (e.code === "F5" && false) {
     return;
   }
   if (e.code === "F4" && gamemode === "creative") {
@@ -652,10 +819,33 @@ function loop(now) {
     const events = mobs.update(dt, world, player, isNight());
     for (const ev of events) {
       if (ev.type === "attack") player.takeDamage(ev.damage);
-      if (ev.type === "death") {
-        // already dead
+      if (ev.explode) {
+        sfx.thunder();
+        spawnParticles(player.position.x, player.position.y, player.position.z, 0x3aaa3a);
+        player.takeDamage(ev.damage || 6);
+        player.addEffect("poison", 3, 0.5);
       }
     }
+
+    // drops + third person body + clouds
+    updateDrops(dt, player);
+    if (player.view !== 0) {
+      bodyGroup.visible = true;
+      bodyGroup.position.copy(player.position);
+      bodyGroup.rotation.y = player.yaw;
+    } else {
+      bodyGroup.visible = false;
+    }
+    for (const c of cloudGroup.children) {
+      c.position.x += c.userData.vx * dt;
+      if (c.position.x > 120) c.position.x = -120;
+    }
+    cloudGroup.position.x = Math.floor(player.position.x / 20) * 20;
+    cloudGroup.position.z = Math.floor(player.position.z / 20) * 20;
+    cloudGroup.visible = world.activeDim === Dim.OVERWORLD;
+
+    // water + lava nearby → obsidian / cobble
+    maybeFluidReact(dt);
 
     // portal check
     portalToastCd -= dt;
@@ -696,7 +886,7 @@ function loop(now) {
   updateSky(dt);
   weather.update(dt, player, world, timeOfDay);
 
-  ui.updateVitals(player.health, player.hunger);
+  ui.updateVitals(player.health, player.hunger, player.oxygen, player.xpLevel, player.xp);
   ui.updateDebug(
     `VoxelCraft  ${fps.toFixed(0)} ${t("fps")}
 ${t("pos")} ${player.position.x.toFixed(1)} ${player.position.y.toFixed(1)} ${player.position.z.toFixed(1)}

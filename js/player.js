@@ -62,7 +62,15 @@ export class Player {
     this.stepTimer = 0;
     this.dead = false;
     this.inventory = new Inventory(36);
-    this.selected = null; // furnace ui state etc
+    this.selected = null;
+    this.oxygen = 10;
+    this.maxOxygen = 10;
+    this.airTimer = 0;
+    this.xp = 0;
+    this.xpLevel = 0;
+    this.effects = {}; // name -> {time, amp}
+    this.view = 0; // 0 first, 1 third, 2 front
+    this.heldItemGlow = 0;
   }
 
   get held() {
@@ -160,12 +168,49 @@ export class Player {
     return true;
   }
 
+  addEffect(name, time, amp = 1) {
+    this.effects[name] = { time, amp };
+  }
+
+  addXP(n) {
+    this.xp += n;
+    const need = 7 + this.xpLevel * 3;
+    if (this.xp >= need) {
+      this.xp -= need;
+      this.xpLevel++;
+      sfx.craft();
+    }
+  }
+
+  cycleView() {
+    this.view = (this.view + 1) % 3;
+    return this.view;
+  }
+
+  dropHeld() {
+    const h = this.held;
+    if (!h || this.gamemode === "creative") return null;
+    const id = h.id;
+    const count = h.count;
+    h.count = 0;
+    this.inventory.set(this.hotbarIndex, null);
+    return { id, count };
+  }
+
   update(dt) {
     if (this.dead) return;
 
     this.hurtCd = Math.max(0, this.hurtCd - dt);
     this.attackCd = Math.max(0, this.attackCd - dt);
     this.portalCd = Math.max(0, this.portalCd - dt);
+
+    // status effects
+    for (const k of Object.keys(this.effects)) {
+      this.effects[k].time -= dt;
+      if (this.effects[k].time <= 0) delete this.effects[k];
+    }
+    if (this.effects.poison) this.takeDamage(dt * this.effects.poison.amp);
+    if (this.effects.regen) this.heal(dt * this.effects.regen.amp);
 
     const fwd = (this.keys.has("KeyW") ? 1 : 0) - (this.keys.has("KeyS") ? 1 : 0);
     const strafe = (this.keys.has("KeyD") ? 1 : 0) - (this.keys.has("KeyA") ? 1 : 0);
@@ -210,6 +255,7 @@ export class Player {
       this.velocity.y -= GRAVITY * 0.25 * dt;
       if (this.keys.has("Space")) this.velocity.y += GRAVITY * 0.5 * dt;
       this.takeDamage(2 * dt * 2);
+      this.addEffect("fire", 3, 1);
     } else {
       this.velocity.y -= GRAVITY * dt;
       if (this.keys.has("Space") && this.onGround) {
@@ -264,6 +310,22 @@ export class Player {
 
     // survival ticks
     if (this.gamemode === "survival") {
+      // oxygen underwater
+      const headUnder =
+        this.world.isInWater(this.position.x, this.position.y + EYE, this.position.z) ||
+        this.world.isInLava(this.position.x, this.position.y + EYE, this.position.z);
+      if (headUnder && this.world.isInWater(this.position.x, this.position.y + EYE, this.position.z)) {
+        this.airTimer += dt;
+        if (this.airTimer > 1) {
+          this.airTimer = 0;
+          this.oxygen = Math.max(0, this.oxygen - 1);
+          if (this.oxygen <= 0) this.takeDamage(2);
+        }
+      } else {
+        this.airTimer = 0;
+        this.oxygen = Math.min(this.maxOxygen, this.oxygen + dt * 2);
+      }
+
       this.hungerTimer += dt * (this.sprint ? 1.8 : 1);
       if (this.hungerTimer > 45) {
         this.hungerTimer = 0;
@@ -372,7 +434,24 @@ export class Player {
 
   syncCamera(hSpeed = 0) {
     const bobY = this.onGround && !this.flying && hSpeed > 0.5 ? Math.sin(this.bob * 2) * 0.045 : 0;
-    this.camera.position.set(this.position.x, this.position.y + EYE + bobY, this.position.z);
+    const eye = new THREE.Vector3(
+      this.position.x,
+      this.position.y + EYE + bobY,
+      this.position.z
+    );
+    if (this.view === 0) {
+      this.camera.position.copy(eye);
+    } else {
+      const dir = this.getLookDir();
+      const dist = 4.5;
+      const back = this.view === 1 ? -1 : 1;
+      const camPos = eye.clone().addScaledVector(dir, dist * back);
+      // simple ground clip
+      if (this.world.isSolidAt(camPos.x, camPos.y, camPos.z)) {
+        camPos.copy(eye).addScaledVector(dir, 1.2 * back);
+      }
+      this.camera.position.copy(camPos);
+    }
     this.camera.rotation.order = "YXZ";
     this.camera.rotation.y = this.yaw;
     this.camera.rotation.x = this.pitch;
@@ -407,15 +486,17 @@ export class Player {
     const drop = blockDrop(hit.id);
     const result = { x: hit.x, y: hit.y, z: hit.z, id: hit.id, action: "break" };
     if (drop && this.gamemode === "survival") {
-      this.inventory.add(drop, 1);
       result.drop = drop;
+      result.count = 1;
     }
-    // random drops
     if (def?.randomDrop && this.gamemode === "survival") {
       for (const [id, ch] of Object.entries(def.randomDrop)) {
-        if (Math.random() < ch) this.inventory.add(Number(id), 1);
+        if (Math.random() < ch) {
+          result.bonus = Number(id);
+        }
       }
     }
+    this.addXP(1);
     return result;
   }
 

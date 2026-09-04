@@ -114,6 +114,8 @@ kbd {
 }
 .vitals .hp { color: #ff5a5a; }
 .vitals .hg { color: #e8a04a; }
+.vitals .air { color: #6ec8ff; }
+.vitals .xp { color: #7dff7d; font-size: 12px; }
 
 .debug {
   position: absolute; top: 12px; left: 12px; padding: 10px 12px; min-width: 240px;

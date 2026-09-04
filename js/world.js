@@ -207,11 +207,17 @@ export class Dimension {
       if (y === 0) id = Block.BEDROCK;
       else if (y < h - 4) {
         id = Block.STONE;
-        // ores
         const o = this.noise.noise3(wx * 0.12, y * 0.12, wz * 0.12);
         if (o > 0.72 && y < 40) id = Block.COAL_ORE;
         else if (o > 0.78 && y < 28) id = Block.IRON_ORE;
         else if (o < -0.8 && y > 8) id = Block.GRAVEL;
+        // 3D noise caves
+        if (y > 4 && y < h - 6) {
+          const c = this.noise.noise3(wx * 0.08, y * 0.1, wz * 0.08);
+          const c2 = this.noise.noise3(wx * 0.16 + 50, y * 0.14, wz * 0.16 + 50);
+          if (c + c2 * 0.5 > 0.62) id = Block.AIR;
+          else if (c + c2 * 0.5 > 0.55 && y < 16) id = Block.LAVA;
+        }
       } else if (y < h) id = underBlock(biome);
       else id = surfaceBlock(biome, snow);
       chunk.set(lx, y, lz, id);

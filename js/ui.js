@@ -156,7 +156,7 @@ export class UI {
   }
 
   /** Survival bars under crosshair area. */
-  updateVitals(health, hunger) {
+  updateVitals(health, hunger, oxygen = 10, xpLevel = 0, xp = 0) {
     let el = document.getElementById("vitals");
     if (!el) {
       el = document.createElement("div");
@@ -168,7 +168,30 @@ export class UI {
     const hu = Math.ceil(hunger);
     const hearts = "♥".repeat(Math.max(0, Math.ceil(hp / 2)));
     const drums = "🍗".repeat(Math.max(0, Math.ceil(hu / 2)));
-    el.innerHTML = `<span class="hp">${hearts}</span><span class="hg">${drums}</span>`;
+    const air = oxygen < 10 ? `<span class="air">${"○".repeat(Math.ceil(oxygen))}</span>` : "";
+    el.innerHTML = `<span class="hp">${hearts}</span><span class="hg">${drums}</span>${air}<span class="xp">Lv ${xpLevel}</span>`;
+  }
+
+  showPause(onResume, onSaveExit) {
+    this.closePanel();
+    const el = document.createElement("div");
+    el.className = "panel-overlay death";
+    el.innerHTML = `
+      <div class="panel">
+        <div class="logo" style="font-size:28px">${t("pause") || "暂停"}</div>
+        <div class="btnrow" style="margin-top:16px">
+          <button type="button" id="btn-resume">${t("start") || "继续"}</button>
+          <button type="button" id="btn-save-exit" class="ghost">${t("save")}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(el);
+    this.panel = el;
+    el.querySelector("#btn-resume").onclick = () => {
+      el.remove();
+      this.panel = null;
+      onResume();
+    };
+    el.querySelector("#btn-save-exit").onclick = () => onSaveExit();
   }
 
   toast(msg) {

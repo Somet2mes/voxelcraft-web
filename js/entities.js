@@ -41,6 +41,24 @@ const MOB_TYPES = {
     hostile: false,
     drops: [{ id: 1007, chance: 0.4, count: 1 }],
   },
+  creeper: {
+    color: 0x3aaa3a,
+    head: 0x44cc44,
+    hp: 12,
+    damage: 7,
+    speed: 2.0,
+    hostile: true,
+    drops: [{ id: 1005, chance: 0.5, count: 1 }],
+  },
+  ender: {
+    color: 0x1a1028,
+    head: 0x2a1840,
+    hp: 20,
+    damage: 5,
+    speed: 2.8,
+    hostile: true,
+    drops: [{ id: 1004, chance: 0.3, count: 1 }],
+  },
 };
 
 function makeBox(w, h, d, color) {
@@ -62,6 +80,7 @@ export class Mob {
     this.attackCd = 0;
     this.wanderTimer = 0;
     this.dead = false;
+    this.fuse = 0;
     this.group = this.buildMesh();
     this.group.position.copy(this.position);
   }
@@ -132,7 +151,13 @@ export class Mob {
       wishX = toPlayer.x;
       wishZ = toPlayer.z;
       this.yaw = Math.atan2(wishX, wishZ);
-      if (dist < 1.4 && this.attackCd <= 0) {
+      if (this.type === "creeper" && dist < 3.0) {
+        this.fuse += dt;
+        if (this.fuse > 1.6) {
+          this.dead = true;
+          return { attack: this.def.damage, explode: true };
+        }
+      } else if (dist < 1.4 && this.attackCd <= 0) {
         this.attackCd = 0.8;
         return { attack: this.def.damage };
       }
@@ -181,10 +206,16 @@ export class Mob {
     this.group.position.copy(this.position);
     this.group.rotation.y = this.yaw;
     // hurt flash
-    const flash = this.hurtTimer > 0;
+    const flash = this.hurtTimer > 0 || this.fuse > 0;
     this.group.traverse((o) => {
-      if (o.material && o.material.emissive) o.material.emissive.setHex(flash ? 0x660000 : 0x000000);
+      if (o.material && o.material.emissive) {
+        o.material.emissive.setHex(this.fuse > 0 ? 0xaa8800 : flash ? 0x660000 : 0x000000);
+      }
     });
+    if (this.fuse > 0) {
+      const s = 1 + Math.sin(this.fuse * 18) * 0.12;
+      this.group.scale.set(s, s, s);
+    }
 
     return null;
   }
@@ -204,7 +235,7 @@ export class MobManager {
 
   spawnAround(player, world, isNight) {
     if (this.mobs.length > 24) return;
-    const hostile = isNight ? ["zombie", "skeleton"] : ["pig", "cow"];
+    const hostile = isNight ? ["zombie", "skeleton", "creeper", "ender"] : ["pig", "cow"];
     const type = hostile[Math.floor(Math.random() * hostile.length)];
     const ang = Math.random() * Math.PI * 2;
     const r = 16 + Math.random() * 18;
