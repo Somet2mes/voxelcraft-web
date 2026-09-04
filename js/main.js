@@ -501,7 +501,6 @@ window.addEventListener("keydown", (e) => {
     gamemode = gamemode === "creative" ? "survival" : "creative";
     player.gamemode = gamemode;
     ui.toast(gamemode === "creative" ? t("creative") : t("survival"));
-    if (gamemode === "survival") player.flying = false;
     return;
   }
   if (e.code === "KeyP") {

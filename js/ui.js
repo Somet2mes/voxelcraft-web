@@ -55,8 +55,9 @@ export class UI {
         <button id="btn-lang" type="button" class="ghost lang">${t("langSwitch")}</button>
         <div class="controls">
           <div><kbd>W A S D</kbd> ${t("move")}</div>
-          <div><kbd>空格</kbd> ${t("jumpFly")} · <kbd>F</kbd></div>
+          <div><kbd>空格</kbd> 跳跃 / 双击飞行 · <kbd>F</kbd> 飞行开关</div>
           <div><kbd>E</kbd> ${t("openInv")}</div>
+          <div><kbd>G</kbd> 创造/生存 · <kbd>L</kbd> 中英 · <kbd>P</kbd> 存档</div>
           <div><kbd>左键</kbd> ${t("digPlace")}</div>
           <div><kbd>1–9</kbd> ${t("select")}</div>
         </div>

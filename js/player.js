@@ -112,17 +112,17 @@ export class Player {
     if (down) this.keys.add(code);
     else this.keys.delete(code);
     if (down && code === "KeyF") {
-      if (this.gamemode === "creative" || this.flying) {
-        this.flying = !this.flying;
-        this.velocity.y = 0;
-        return "flying";
-      }
+      this.flying = !this.flying;
+      this.velocity.y = 0;
+      return "flying";
     }
     if (down && code === "Space") {
       const now = performance.now();
-      if (now - this.lastSpace < 280 && this.gamemode === "creative") {
+      if (now - this.lastSpace < 280) {
         this.flying = !this.flying;
         this.velocity.y = 0;
+        this.lastSpace = 0;
+        return "flying";
       }
       this.lastSpace = now;
     }
